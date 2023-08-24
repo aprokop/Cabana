@@ -25,16 +25,16 @@
 
 //---------------------------------------------------------------------------//
 // Performance test.
-template <class Device>
+template <class Device, typename ListTag>
 void performanceTest( std::ostream& stream, const std::string& test_prefix,
                       std::vector<int> problem_sizes,
-                      std::vector<double> cutoff_ratios, bool sort = true )
+                      std::vector<double> cutoff_ratios, bool is2D,
+                      bool sort = true )
 {
     using exec_space = typename Device::execution_space;
     using memory_space = typename Device::memory_space;
 
     // Declare the neighbor list type.
-    using ListTag = Cabana::FullNeighborTag;
     using IterTag = Cabana::SerialOpTag;
 
     // Declare problem sizes.
@@ -76,7 +76,6 @@ void performanceTest( std::ostream& stream, const std::string& test_prefix,
             double sort_delta[3] = { cutoff, cutoff, cutoff };
             double grid_min[3] = { x_min[p], x_min[p], x_min[p] };
             double grid_max[3] = { x_max[p], x_max[p], x_max[p] };
-            auto x = Cabana::slice<0>( aosoas[p], "position" );
             Cabana::LinkedCellList<Device> linked_cell_list(
                 x, sort_delta, grid_min, grid_max );
             Cabana::permute( linked_cell_list, aosoas[p] );
@@ -90,7 +89,11 @@ void performanceTest( std::ostream& stream, const std::string& test_prefix,
 
         // Create timers.
         std::stringstream create_time_name;
-        create_time_name << test_prefix << "neigh_create_" << cutoff_ratios[c];
+        create_time_name << test_prefix << "neigh_create_"
+                         << ( std::is_same_v<ListTag, Cabana::FullNeighborTag>
+                                  ? "full_"
+                                  : "half_" )
+                         << ( is2D ? "2D_" : "CRS_" ) << cutoff_ratios[c];
         Cabana::Benchmark::Timer create_timer( create_time_name.str(),
                                                num_problem_size );
         std::stringstream iteration_time_name;
@@ -126,12 +129,17 @@ void performanceTest( std::ostream& stream, const std::string& test_prefix,
                 // Create the neighbor list.
                 double cutoff = cutoff_ratios[c];
                 create_timer.start( pid );
-                auto const nlist =
+                if ( is2D )
                     Cabana::Experimental::make2DNeighborList<Device>(
+                        ListTag{}, Cabana::slice<0>( aosoas[p], "position" ), 0,
+                        num_p, cutoff );
+                else
+                    Cabana::Experimental::makeNeighborList<Device>(
                         ListTag{}, Cabana::slice<0>( aosoas[p], "position" ), 0,
                         num_p, cutoff );
                 create_timer.stop( pid );
 
+#if 0
                 // Iterate through the neighbor list.
                 iteration_timer.start( pid );
                 Cabana::neighbor_parallel_for( policy, count_op, nlist,
@@ -139,6 +147,7 @@ void performanceTest( std::ostream& stream, const std::string& test_prefix,
                                                IterTag(), "test_iteration" );
                 Kokkos::fence();
                 iteration_timer.stop( pid );
+#endif
             }
 
             // Increment the problem id.
@@ -147,7 +156,8 @@ void performanceTest( std::ostream& stream, const std::string& test_prefix,
 
         // Output results.
         outputResults( stream, "problem_size", psizes, create_timer );
-        outputResults( stream, "problem_size", psizes, iteration_timer );
+        // outputResults( stream, "problem_size", psizes, iteration_timer );
+        stream.flush();
     }
 }
 
@@ -174,13 +184,7 @@ int main( int argc, char* argv[] )
     std::string run_type = "";
     if ( argc > 2 )
         run_type = argv[2];
-    std::vector<int> problem_sizes = { 100, 1000 };
-    std::vector<double> cutoff_ratios = { 2.0, 3.0 };
-    if ( run_type == "large" )
-    {
-        problem_sizes = { 1000, 10000, 100000, 1000000 };
-        cutoff_ratios = { 3.0, 4.0, 5.0 };
-    }
+    std::vector<double> cutoff_ratios = { 2.0, 3.0, 4.0 };
 
     // Open the output file on rank 0.
     std::fstream file;
@@ -196,11 +200,30 @@ int main( int argc, char* argv[] )
     // Don't run twice on the CPU if only host enabled.
     if ( !std::is_same<device_type, host_device_type>{} )
     {
-        performanceTest<device_type>( file, "device_", problem_sizes,
-                                      cutoff_ratios );
+        std::vector<int> problem_sizes = { 100000, 1000000, 10000000 };
+
+        performanceTest<device_type, Cabana::FullNeighborTag>(
+            file, "device_", problem_sizes, cutoff_ratios, false /*crs*/ );
+        performanceTest<device_type, Cabana::FullNeighborTag>(
+            file, "device_", problem_sizes, cutoff_ratios, true /*2D*/ );
+        performanceTest<device_type, Cabana::HalfNeighborTag>(
+            file, "device_", problem_sizes, cutoff_ratios, false /*crs*/ );
+        performanceTest<device_type, Cabana::HalfNeighborTag>(
+            file, "device_", problem_sizes, cutoff_ratios, true /*2D*/ );
     }
-    performanceTest<host_device_type>( file, "host_", problem_sizes,
-                                       cutoff_ratios );
+    else
+    {
+        std::vector<int> problem_sizes = { 1000, 10000, 100000 };
+
+        performanceTest<host_device_type, Cabana::FullNeighborTag>(
+            file, "host_", problem_sizes, cutoff_ratios, false /*crs*/ );
+        performanceTest<host_device_type, Cabana::FullNeighborTag>(
+            file, "host_", problem_sizes, cutoff_ratios, true /*2D*/ );
+        performanceTest<host_device_type, Cabana::HalfNeighborTag>(
+            file, "host_", problem_sizes, cutoff_ratios, false /*crs*/ );
+        performanceTest<host_device_type, Cabana::HalfNeighborTag>(
+            file, "host_", problem_sizes, cutoff_ratios, true /*2D*/ );
+    }
 
     // Close the output file on rank 0.
     file.close();

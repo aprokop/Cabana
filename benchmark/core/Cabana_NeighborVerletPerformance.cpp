@@ -25,18 +25,17 @@
 
 //---------------------------------------------------------------------------//
 // Performance test.
-template <class Device>
+template <class Device, typename ListTag>
 void performanceTest( std::ostream& stream, const std::string& test_prefix,
                       std::vector<int> problem_sizes,
                       std::vector<double> cutoff_ratios,
-                      std::vector<double> cell_ratios, bool sort = true )
+                      std::vector<double> cell_ratios, bool is2D,
+                      bool sort = true )
 {
     using exec_space = typename Device::execution_space;
     using memory_space = typename Device::memory_space;
 
     // Declare the neighbor list type.
-    using ListTag = Cabana::FullNeighborTag;
-    using LayoutTag = Cabana::VerletLayout2D;
     using BuildTag = Cabana::TeamVectorOpTag;
     using IterTag = Cabana::SerialOpTag;
 
@@ -97,8 +96,13 @@ void performanceTest( std::ostream& stream, const std::string& test_prefix,
 
             // Create timers.
             std::stringstream create_time_name;
-            create_time_name << test_prefix << "neigh_create_"
-                             << cutoff_ratios[c0] << "_" << cell_ratios[c1];
+            create_time_name
+                << test_prefix << "neigh_create_"
+                << ( std::is_same_v<ListTag, Cabana::FullNeighborTag>
+                         ? "full_"
+                         : "half_" )
+                << ( is2D ? "2D_" : "CRS_" ) << cutoff_ratios[c0] << "_"
+                << cell_ratios[c1];
             Cabana::Benchmark::Timer create_timer( create_time_name.str(),
                                                    num_problem_size );
             std::stringstream iteration_time_name;
@@ -139,13 +143,25 @@ void performanceTest( std::ostream& stream, const std::string& test_prefix,
                     // Create the neighbor list.
                     double cutoff = cutoff_ratios[c0];
                     create_timer.start( pid );
-                    Cabana::VerletList<memory_space, ListTag, LayoutTag,
-                                       BuildTag>
-                        nlist( Cabana::slice<0>( aosoas[p], "position" ), 0,
-                               num_p, cutoff, cell_ratios[c1], grid_min,
-                               grid_max );
+                    if ( is2D )
+                    {
+                        Cabana::VerletList<memory_space, ListTag,
+                                           Cabana::VerletLayout2D, BuildTag>
+                            nlist( Cabana::slice<0>( aosoas[p], "position" ), 0,
+                                   num_p, cutoff, cell_ratios[c1], grid_min,
+                                   grid_max );
+                    }
+                    else
+                    {
+                        Cabana::VerletList<memory_space, ListTag,
+                                           Cabana::VerletLayoutCSR, BuildTag>
+                            nlist( Cabana::slice<0>( aosoas[p], "position" ), 0,
+                                   num_p, cutoff, cell_ratios[c1], grid_min,
+                                   grid_max );
+                    }
                     create_timer.stop( pid );
 
+#if 0
                     // Iterate through the neighbor list.
                     iteration_timer.start( pid );
                     Cabana::neighbor_parallel_for(
@@ -195,6 +211,7 @@ void performanceTest( std::ostream& stream, const std::string& test_prefix,
                             << std::endl;
                         std::cout << std::endl;
                     }
+#endif
                 }
 
                 // Increment the problem id.
@@ -203,7 +220,8 @@ void performanceTest( std::ostream& stream, const std::string& test_prefix,
 
             // Output results.
             outputResults( stream, "problem_size", psizes, create_timer );
-            outputResults( stream, "problem_size", psizes, iteration_timer );
+            // outputResults( stream, "problem_size", psizes, iteration_timer );
+            stream.flush();
         }
     }
 }
@@ -231,15 +249,8 @@ int main( int argc, char* argv[] )
     std::string run_type = "";
     if ( argc > 2 )
         run_type = argv[2];
-    std::vector<int> problem_sizes = { 100, 1000 };
-    std::vector<double> cutoff_ratios = { 2.0, 3.0 };
+    std::vector<double> cutoff_ratios = { 2.0, 3.0, 4.0 };
     std::vector<double> cell_ratios = { 1.0 };
-    if ( run_type == "large" )
-    {
-        problem_sizes = { 1000, 10000, 100000, 1000000 };
-        cutoff_ratios = { 3.0, 4.0, 5.0 };
-        cell_ratios = { 1.0 };
-    }
 
     // Open the output file on rank 0.
     std::fstream file;
@@ -255,11 +266,38 @@ int main( int argc, char* argv[] )
     // Don't run twice on the CPU if only host enabled.
     if ( !std::is_same<device_type, host_device_type>{} )
     {
-        performanceTest<device_type>( file, "device_", problem_sizes,
-                                      cutoff_ratios, cell_ratios );
+        std::vector<int> problem_sizes = { 100000, 1000000, 10000000 };
+
+        performanceTest<device_type, Cabana::FullNeighborTag>(
+            file, "device_", problem_sizes, cutoff_ratios, cell_ratios,
+            false /*crs*/ );
+        performanceTest<device_type, Cabana::FullNeighborTag>(
+            file, "device_", problem_sizes, cutoff_ratios, cell_ratios,
+            true /*2D*/ );
+        performanceTest<device_type, Cabana::HalfNeighborTag>(
+            file, "device_", problem_sizes, cutoff_ratios, cell_ratios,
+            false /*crs*/ );
+        performanceTest<device_type, Cabana::HalfNeighborTag>(
+            file, "device_", problem_sizes, cutoff_ratios, cell_ratios,
+            true /*2D*/ );
     }
-    performanceTest<host_device_type>( file, "host_", problem_sizes,
-                                       cutoff_ratios, cell_ratios );
+    else
+    {
+        std::vector<int> problem_sizes = { 1000, 10000, 100000 };
+
+        performanceTest<host_device_type, Cabana::FullNeighborTag>(
+            file, "host_", problem_sizes, cutoff_ratios, cell_ratios,
+            false /*crs*/ );
+        performanceTest<host_device_type, Cabana::FullNeighborTag>(
+            file, "host_", problem_sizes, cutoff_ratios, cell_ratios,
+            true /*2D*/ );
+        performanceTest<host_device_type, Cabana::HalfNeighborTag>(
+            file, "host_", problem_sizes, cutoff_ratios, cell_ratios,
+            false /*crs*/ );
+        performanceTest<host_device_type, Cabana::HalfNeighborTag>(
+            file, "host_", problem_sizes, cutoff_ratios, cell_ratios,
+            true /*2D*/ );
+    }
 
     // Close the output file on rank 0.
     file.close();
