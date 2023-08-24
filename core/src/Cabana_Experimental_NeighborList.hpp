@@ -20,6 +20,7 @@
 #include <Cabana_Slice.hpp>
 
 #include <ArborX.hpp>
+#include <ArborX_NeighborList.hpp>
 
 #include <Kokkos_Core.hpp>
 
@@ -275,7 +276,7 @@ auto makeNeighborList( Tag, Slice const& coordinate_slice,
                        typename Slice::size_type last,
                        typename Slice::value_type radius, int buffer_size = 0 )
 {
-    assert( buffer_size >= 0 );
+    assert( buffer_size == 0 );
     assert( last >= first );
     assert( last <= coordinate_slice.size() );
 
@@ -283,19 +284,25 @@ auto makeNeighborList( Tag, Slice const& coordinate_slice,
     using ExecutionSpace = typename DeviceType::execution_space;
     ExecutionSpace space{};
 
-    ArborX::BVH<MemorySpace> bvh( space, coordinate_slice );
-
-    Kokkos::View<int*, DeviceType> indices(
-        Kokkos::view_alloc( "indices", Kokkos::WithoutInitializing ), 0 );
     Kokkos::View<int*, DeviceType> offset(
-        Kokkos::view_alloc( "offset", Kokkos::WithoutInitializing ), 0 );
-    bvh.query(
-        space, Impl::makePredicates( coordinate_slice, first, last, radius ),
-        Impl::NeighborDiscriminatorCallback<Tag>{}, indices, offset,
-        ArborX::Experimental::TraversalPolicy().setBufferSize( buffer_size ) );
+        Kokkos::view_alloc( "Cabana::makeNeighborList::offset",
+                            Kokkos::WithoutInitializing ),
+        0 );
+    Kokkos::View<int*, DeviceType> indices(
+        Kokkos::view_alloc( "Cabana::makeNeighborList::indices",
+                            Kokkos::WithoutInitializing ),
+        0 );
+    // FIXME: this will only work for a single MPI rank, as there is no way
+    // inside the ArborX to indicate how to search for only a subset
+    if constexpr ( std::is_same_v<Tag, HalfNeighborTag> )
+        ArborX::Experimental::findHalfNeighborList( space, coordinate_slice,
+                                                    radius, offset, indices );
+    else
+        ArborX::Experimental::findFullNeighborList( space, coordinate_slice,
+                                                    radius, offset, indices );
 
-    return CrsGraph<MemorySpace, Tag>{ std::move( indices ),
-                                       std::move( offset ), first, bvh.size() };
+    return CrsGraph<MemorySpace, Tag>{
+        std::move( indices ), std::move( offset ), first, offset.size() - 1 };
 }
 
 //! 2d ArborX neighbor list storage layout.
@@ -341,7 +348,8 @@ auto make2DNeighborList( Tag, Slice const& coordinate_slice,
                          typename Slice::value_type radius,
                          int buffer_size = 0 )
 {
-    assert( buffer_size >= 0 );
+    // assert( buffer_size >= 0 );
+    assert( buffer_size == 0 );
     assert( last >= first );
     assert( last <= coordinate_slice.size() );
 
@@ -365,18 +373,25 @@ auto make2DNeighborList( Tag, Slice const& coordinate_slice,
         neighbors = Kokkos::View<int**, DeviceType>(
             Kokkos::view_alloc( "neighbors", Kokkos::WithoutInitializing ),
             n_queries, buffer_size );
+        Kokkos::Profiling::pushRegion(
+            "Cabana::Experimental::make2DNeighborList::first_pass" );
+
         bvh.query(
             space, predicates,
             Impl::NeighborDiscriminatorCallback2D_FirstPass_BufferOptimization<
                 decltype( counts ), decltype( neighbors ), Tag>{ counts,
                                                                  neighbors } );
+        Kokkos::Profiling::popRegion();
     }
     else
     {
+        Kokkos::Profiling::pushRegion(
+            "Cabana::Experimental::make2DNeighborList::first_pass" );
         bvh.query(
             space, predicates,
             Impl::NeighborDiscriminatorCallback2D_FirstPass<decltype( counts ),
                                                             Tag>{ counts } );
+        Kokkos::Profiling::popRegion();
     }
 
     auto const max_neighbors = ArborX::max( space, counts );
@@ -393,10 +408,14 @@ auto make2DNeighborList( Tag, Slice const& coordinate_slice,
         Kokkos::view_alloc( "neighbors", Kokkos::WithoutInitializing ),
         n_queries, max_neighbors ); // realloc storage for neighbors
     Kokkos::deep_copy( counts, 0 ); // reset counts to zero
+
+    Kokkos::Profiling::pushRegion(
+        "Cabana::Experimental::make2DNeighborList::second_pass" );
     bvh.query( space, predicates,
                Impl::NeighborDiscriminatorCallback2D_SecondPass<
                    decltype( counts ), decltype( neighbors ), Tag>{
                    counts, neighbors } );
+    Kokkos::Profiling::popRegion();
 
     return Dense<MemorySpace, Tag>{ counts, neighbors, first, bvh.size() };
 }
