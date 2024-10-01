@@ -78,7 +78,7 @@ else()
 endif()
 
 # find ArborX
-Cabana_add_dependency( PACKAGE ArborX )
+Cabana_add_dependency( PACKAGE ArborX VERSION 2.0)
 
 # find ALL
 Cabana_add_dependency( PACKAGE ALL )
