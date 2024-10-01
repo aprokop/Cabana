@@ -287,7 +287,7 @@ jobs:
         uses: actions/checkout@v3
         with:
           repository: arborx/ArborX
-          ref: v1.2
+          ref: master
           path: arborx
       - name: Build arborx
         if: ${{ matrix.arborx == 'ArborX' }}
@@ -509,7 +509,7 @@ jobs:
         uses: actions/checkout@v3
         with:
           repository: arborx/ArborX
-          ref: v1.2
+          ref: master
           path: arborx
       - name: Build arborx
         working-directory: arborx
@@ -593,7 +593,7 @@ jobs:
         uses: actions/checkout@v3
         with:
           repository: arborx/ArborX
-          ref: v1.2
+          ref: master
           path: arborx
       - name: Build arborx
         working-directory: arborx
