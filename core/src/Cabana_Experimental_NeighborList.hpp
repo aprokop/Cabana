@@ -120,11 +120,11 @@ struct AccessTraits<Positions, PrimitivesTag,
         return Cabana::size( x );
     }
     //! Get the particle at the index.
-    static KOKKOS_FUNCTION Point get( Positions const& x, size_type i )
+    static KOKKOS_FUNCTION auto get( Positions const& x, size_type i )
     {
-        return { static_cast<float>( x( i, 0 ) ),
-                 static_cast<float>( x( i, 1 ) ),
-                 static_cast<float>( x( i, 2 ) ) };
+        return Point{ static_cast<float>( x( i, 0 ) ),
+                      static_cast<float>( x( i, 1 ) ),
+                      static_cast<float>( x( i, 2 ) ) };
     }
 };
 //! Neighbor access trait.
@@ -151,7 +151,9 @@ struct AccessTraits<
         auto const point =
             AccessTraits<typename PositionLike::positions_type,
                          PrimitivesTag>::get( x.data, x.first + i );
-        return attach( intersects( Sphere{ point, x.radius } ), (int)i );
+        return attach(
+            intersects( Sphere{ point, static_cast<float>( x.radius ) } ),
+            (int)i );
     }
 };
 } // namespace ArborX
@@ -186,11 +188,13 @@ struct CollisionFilter<HalfNeighborTag>
 template <typename Tag>
 struct NeighborDiscriminatorCallback
 {
-    template <typename Predicate, typename OutputFunctor>
-    KOKKOS_FUNCTION void operator()( Predicate const& predicate,
-                                     int primitive_index,
-                                     OutputFunctor const& out ) const
+    template <typename Predicate, typename Geometry, typename OutputFunctor>
+    KOKKOS_FUNCTION void
+    operator()( Predicate const& predicate,
+                ArborX::PairValueIndex<Geometry, int> const& value_pair,
+                OutputFunctor const& out ) const
     {
+        int const primitive_index = value_pair.index;
         int const predicate_index = getData( predicate );
         if ( CollisionFilter<Tag>::keep( predicate_index, primitive_index ) )
         {
@@ -204,10 +208,12 @@ template <typename Counts, typename Tag>
 struct NeighborDiscriminatorCallback2D_FirstPass
 {
     Counts counts;
-    template <typename Predicate>
-    KOKKOS_FUNCTION void operator()( Predicate const& predicate,
-                                     int primitive_index ) const
+    template <typename Predicate, typename Geometry>
+    KOKKOS_FUNCTION void
+    operator()( Predicate const& predicate,
+                ArborX::PairValueIndex<Geometry, int> const& value_pair ) const
     {
+        int const primitive_index = value_pair.index;
         int const predicate_index = getData( predicate );
         if ( CollisionFilter<Tag>::keep( predicate_index, primitive_index ) )
         {
@@ -222,10 +228,12 @@ struct NeighborDiscriminatorCallback2D_FirstPass_BufferOptimization
 {
     Counts counts;
     Neighbors neighbors;
-    template <typename Predicate>
-    KOKKOS_FUNCTION void operator()( Predicate const& predicate,
-                                     int primitive_index ) const
+    template <typename Predicate, typename Geometry>
+    KOKKOS_FUNCTION void
+    operator()( Predicate const& predicate,
+                ArborX::PairValueIndex<Geometry, int> const& value_pair ) const
     {
+        int const primitive_index = value_pair.index;
         int const predicate_index = getData( predicate );
         auto& count = counts( predicate_index );
         if ( CollisionFilter<Tag>::keep( predicate_index, primitive_index ) )
@@ -249,10 +257,12 @@ struct NeighborDiscriminatorCallback2D_SecondPass
 {
     Counts counts;
     Neighbors neighbors;
-    template <typename Predicate>
-    KOKKOS_FUNCTION void operator()( Predicate const& predicate,
-                                     int primitive_index ) const
+    template <typename Predicate, typename Geometry>
+    KOKKOS_FUNCTION void
+    operator()( Predicate const& predicate,
+                ArborX::PairValueIndex<Geometry, int> const& value_pair ) const
     {
+        int const primitive_index = value_pair.index;
         int const predicate_index = getData( predicate );
         auto& count = counts( predicate_index );
         if ( CollisionFilter<Tag>::keep( predicate_index, primitive_index ) )
@@ -319,7 +329,8 @@ auto makeNeighborList( ExecutionSpace space, Tag, Positions const& positions,
 
     using memory_space = typename Positions::memory_space;
 
-    ArborX::BVH<memory_space> bvh( space, positions );
+    ArborX::BoundingVolumeHierarchy bvh(
+        space, ArborX::Experimental::attach_indices<int>( positions ) );
 
     Kokkos::View<int*, memory_space> indices(
         Kokkos::view_alloc( "indices", Kokkos::WithoutInitializing ), 0 );
@@ -444,7 +455,8 @@ auto make2DNeighborList( ExecutionSpace space, Tag, Positions const& positions,
 
     using memory_space = typename Positions::memory_space;
 
-    ArborX::BVH<memory_space> bvh( space, positions );
+    ArborX::BoundingVolumeHierarchy bvh(
+        space, ArborX::Experimental::attach_indices<int>( positions ) );
 
     auto const predicates =
         Impl::makePredicates( positions, first, last, radius );
